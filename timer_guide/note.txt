@@ -1,0 +1,59 @@
+定时器timer注意事项：
+1. stop调用后，不一定可以清空timer的chan，如果stop返回false，
+说明定时器timer所设置的时间已经到了，timer会fire,fire就是说timer的chan已经有值了
+既然chan已经有值了，stop是不会清空这个chan的。
+stop的作用是防止timer fire，即只有在其尚未fire时调用才能防止有人可以从其chan中读出值。
+
+运行一下代码：
+func main() {
+
+	testReadAndStop()
+
+	c := make(chan struct{})
+	<-c
+}
+
+结果就是打印出：
+stopTimer stop Timer get false,try to drain timer's channel
+readTimer read from my Timer
+
+然后就是deadlock的error信息，"stopTimer stop Timer success drain timer's channel"不会被打印出来
+
+Stop函数的注释已写得很清楚，它的正确用法是：
+if !t.Stop() {
+ 		<-t.C
+}
+但是如果这样用，就不可以并发地读取timer和调用Stop：
+This cannot be done concurrent to other receives from the Timer's channel
+or other calls to the Timer's Stop method.
+不然很有可能发生死锁。
+
+同时，虽然select读取timer的chan不会阻塞，但是如果你想在调用Stop后，timer的chan一定不会被读取到，
+是做不到的，另一个协程select读取timer的chan是有可能读取到的。
+即使你这样使用
+if !t.Stop() {
+ 		<-t.C
+}
+也有可能select先读取出来，导致
+if !t.Stop() {
+    <-t.C //导致这一行死锁
+}
+
+2.Reset
+// It returns true if the timer had been active,false if the timer had expired or been stopped.
+
+// If a program has already received a value from t.C, the timer is known
+// to have expired and the channel drained, so t.Reset can be used directly.
+// If a program has not yet received a value from t.C, however,
+// the timer must be stopped and—if Stop reports that the timer expired
+// before being stopped—the channel explicitly drained:
+//
+// 	if !t.Stop() {
+// 		<-t.C
+// 	}
+// 	t.Reset(d)
+//
+意思是Reset应该只在timer expired 或者 sopped 才使用
+但是我发现Reset在作为心跳场景十分合适，当timer 还是active时，收到心跳，就马上Reset timer
+这样当长时间没有收到心跳时，就可以触发某些机制...
+
